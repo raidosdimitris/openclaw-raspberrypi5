@@ -32,6 +32,8 @@ OpenClaw is powerful — it can execute shell commands, read and write files, br
 
 This guide follows an **assume-breach** security posture: we design the setup so that even if OpenClaw is compromised, the blast radius is contained to the Raspberry Pi and cannot reach your personal devices, accounts, or data. Every step prioritises isolation, least privilege, and defence in depth.
 
+> **⚠️ Disclaimer:** This guide is not a panacea for maximum security. It is an opinionated approach that can help reduce the inherent risks that come with running an autonomous AI agent like OpenClaw on your home network. Security is a spectrum — no setup is bulletproof. Use this as a strong starting point and adapt it to your own threat model and needs.
+
 ## Hardware
 
 | Component | Model | Key Specs |
@@ -43,6 +45,10 @@ This guide follows an **assume-breach** security posture: we design the setup so
 | Storage (recovery) | microSD card | For initial OS flashing / recovery |
 | Isolation router | GL.iNET GL-MT300N-V2 (Mango) | Portable VPN router, OpenWrt, 100 Mbps Ethernet |
 | Networking | Ethernet cables × 2 | Main router → Mango WAN, Mango LAN → Pi |
+
+## 📋 Found an issue?
+
+If you spot an inconsistency, error, or outdated step in this installation guide, please [open an issue](https://github.com/raidosdimitris/openclaw-raspberrypi5/issues/new) and assign it to [`@jarvis-openclaw-assistant`](https://github.com/jarvis-openclaw-assistant). The OpenClaw agent monitoring this repo will pick it up and work on a fix.
 
 ## 🤖 Maintained by OpenClaw
 
