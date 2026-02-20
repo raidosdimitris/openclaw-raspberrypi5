@@ -1,0 +1,61 @@
+---
+import Base from '../layouts/Base.astro';
+import { marked } from 'marked';
+
+// Import guide.md as raw text using Vite's ?raw query
+import guideContent from '../guide.md?raw';
+
+// Remove TOC section
+const contentWithoutToc = guideContent.replace(/## Table of Contents[\s\S]*?(?=\n---)/m, '');
+
+// Custom renderer for heading IDs
+const renderer = new marked.Renderer();
+renderer.heading = function({tokens, depth}) {
+  const text = this.parser.parseInline(tokens);
+  const raw = tokens.map(t => t.raw || t.text || '').join('');
+  const id = raw.replace(/\*\*/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return '<h' + depth + ' id="' + id + '">' + text + '</h' + depth + '>';
+};
+
+marked.setOptions({ renderer, gfm: true });
+const html = marked.parse(contentWithoutToc);
+
+// Parse sections for sidebar
+const headingRegex = /^(#{1,2})\s+(.+)$/gm;
+const sections = [];
+let match;
+while ((match = headingRegex.exec(guideContent)) !== null) {
+  const level = match[1].length;
+  const text = match[2].replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  sections.push({ level, text, id });
+}
+---
+<Base title="OpenClaw on Raspberry Pi 5 — Installation Guide">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Guide</div>
+      {sections.filter(s => s.level <= 2).map(s => (
+        <a href={`#${s.id}`} style={s.level === 2 ? 'padding-left:16px' : 'font-weight:600'}>{s.text}</a>
+      ))}
+    </div>
+  </aside>
+  <main class="content">
+    <div class="hero">
+      <h1>OpenClaw on <span class="accent">Raspberry Pi 5</span></h1>
+      <p>A step-by-step guide to installing and configuring OpenClaw on a Raspberry Pi 5, written for beginners who want to run an autonomous AI agent <strong>without compromising their home network</strong>.</p>
+      <div class="hero-badges">
+        <span class="badge blue">Raspberry Pi 5</span>
+        <span class="badge green">Security Hardened</span>
+        <span class="badge">Assume Breach</span>
+        <span class="badge">Network Isolated</span>
+      </div>
+      <div style="margin-top:24px">
+        <h3 style="margin-bottom:8px">Why a strict installation?</h3>
+        <p style="color:var(--text-secondary);font-size:15px">OpenClaw is powerful — it can execute shell commands, read and write files, browse the web, and interact with external services. That power comes with real risk. A misconfigured agent could be exploited through prompt injection, malicious skills, or misconfiguration, potentially exposing your home network and personal devices.</p>
+        <p style="color:var(--text-secondary);font-size:15px">This guide follows an <strong>assume-breach</strong> security posture: we design the setup so that even if OpenClaw is compromised, the blast radius is contained to the Raspberry Pi and cannot reach your personal devices, accounts, or data.</p>
+      </div>
+    </div>
+    <Fragment set:html={html} />
+  </main>
+</Base>

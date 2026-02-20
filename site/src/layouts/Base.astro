@@ -1,0 +1,100 @@
+---
+const { title } = Astro.props;
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <meta name="description" content="Security-first installation guide for OpenClaw on Raspberry Pi 5" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦞</text></svg>" />
+  <style is:global>
+    :root{--bg-primary:#0d1117;--bg-secondary:#161b22;--bg-tertiary:#21262d;--text-primary:#e6edf3;--text-secondary:#8b949e;--text-muted:#6e7681;--accent-blue:#58a6ff;--accent-green:#3fb950;--border:#30363d;--code-bg:#161b22;--sidebar-width:280px}
+    [data-theme="light"]{--bg-primary:#fff;--bg-secondary:#f6f8fa;--bg-tertiary:#e1e4e8;--text-primary:#1f2328;--text-secondary:#656d76;--text-muted:#8b949e;--accent-blue:#0969da;--accent-green:#1a7f37;--border:#d0d7de;--code-bg:#f6f8fa}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html{scroll-behavior:smooth;scroll-padding-top:80px}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Noto Sans,Helvetica,Arial,sans-serif;background:var(--bg-primary);color:var(--text-primary);line-height:1.7;font-size:16px}
+    a{color:var(--accent-blue);text-decoration:none}a:hover{text-decoration:underline}
+    .topnav{position:sticky;top:0;z-index:100;background:var(--bg-secondary);border-bottom:1px solid var(--border);padding:0 24px;height:60px;display:flex;align-items:center;justify-content:space-between;backdrop-filter:blur(12px)}
+    .topnav-title{font-weight:600;font-size:18px;color:var(--text-primary);display:flex;align-items:center;gap:8px}
+    .topnav-actions{display:flex;gap:12px;align-items:center}
+    .theme-toggle{background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:14px}
+    .theme-toggle:hover{border-color:var(--accent-blue)}
+    .menu-toggle{display:none;background:none;border:none;color:var(--text-primary);font-size:24px;cursor:pointer}
+    .layout{display:flex;min-height:calc(100vh - 60px)}
+    .sidebar{width:var(--sidebar-width);min-width:var(--sidebar-width);background:var(--bg-secondary);border-right:1px solid var(--border);padding:20px 0;overflow-y:auto;position:sticky;top:60px;height:calc(100vh - 60px);font-size:14px}
+    .sidebar-section{padding:0 16px;margin-bottom:16px}
+    .sidebar-section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;padding:0 8px}
+    .sidebar a{display:block;padding:5px 8px;border-radius:6px;color:var(--text-secondary);font-size:13px;line-height:1.4}
+    .sidebar a:hover{background:var(--bg-tertiary);color:var(--text-primary);text-decoration:none}
+    .sidebar a.active{color:var(--accent-blue);background:rgba(88,166,255,.1)}
+    .content{flex:1;max-width:860px;padding:40px 48px 80px}
+    .hero{margin-bottom:48px;padding-bottom:32px;border-bottom:1px solid var(--border)}
+    .hero h1{font-size:36px;font-weight:700;margin-bottom:16px;line-height:1.2}
+    .hero .accent{color:var(--accent-green)}
+    .hero p{font-size:18px;color:var(--text-secondary);line-height:1.6}
+    .hero-badges{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+    .badge{display:inline-block;padding:4px 12px;border-radius:99px;font-size:12px;font-weight:500;border:1px solid var(--border);color:var(--text-secondary)}
+    .badge.green{border-color:var(--accent-green);color:var(--accent-green)}
+    .badge.blue{border-color:var(--accent-blue);color:var(--accent-blue)}
+    .content h1{font-size:30px;font-weight:700;margin:48px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+    .content h2{font-size:24px;font-weight:600;margin:40px 0 12px}
+    .content h3{font-size:18px;font-weight:600;margin:32px 0 8px}
+    .content h4{font-size:16px;font-weight:600;margin:24px 0 8px}
+    .content p{margin:0 0 16px}
+    .content ul,.content ol{margin:0 0 16px;padding-left:2em}
+    .content li{margin-bottom:4px}
+    .content blockquote{border-left:3px solid var(--accent-blue);padding:12px 16px;margin:16px 0;background:var(--bg-secondary);border-radius:0 6px 6px 0;color:var(--text-secondary)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:32px 0}
+    .content strong{color:var(--text-primary)}
+    .content table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+    .content th{background:var(--bg-tertiary);padding:10px 16px;text-align:left;font-weight:600;font-size:13px;border-bottom:1px solid var(--border)}
+    .content td{padding:10px 16px;border-bottom:1px solid var(--border)}
+    .content tr:last-child td{border-bottom:none}
+    .content code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:14px;font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;border:1px solid var(--border)}
+    .content pre{position:relative;margin:16px 0;border-radius:8px;border:1px solid var(--border);overflow-x:auto}
+    .content pre code{display:block;padding:16px;border:none;background:none;line-height:1.5;font-size:13px}
+    .copy-btn{position:absolute;top:8px;right:8px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;opacity:0;transition:opacity .2s}
+    .content pre:hover .copy-btn{opacity:1}
+    .copy-btn:hover{color:var(--text-primary);border-color:var(--accent-blue)}
+    .copy-btn.copied{color:var(--accent-green);border-color:var(--accent-green)}
+    .footer{text-align:center;padding:32px;color:var(--text-muted);font-size:13px;border-top:1px solid var(--border)}
+    @media(max-width:768px){.sidebar{display:none;position:fixed;left:0;top:60px;z-index:50;width:280px}.sidebar.open{display:block}.menu-toggle{display:block}.content{padding:24px 20px 60px}.hero h1{font-size:28px}}
+  </style>
+</head>
+<body>
+  <nav class="topnav">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="menu-toggle" onclick="document.querySelector('.sidebar').classList.toggle('open')" aria-label="Menu">&#9776;</button>
+      <div class="topnav-title">
+        <span style="color:var(--accent-green)">&#x1f6e1;</span> OpenClaw on Raspberry Pi 5
+      </div>
+    </div>
+    <div class="topnav-actions">
+      <a href="https://github.com/raidosdimitris/openclaw-raspberrypi5" style="color:var(--text-secondary);font-size:14px">GitHub</a>
+      <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">Light</button>
+    </div>
+  </nav>
+  <div class="layout">
+    <slot />
+  </div>
+  <footer class="footer">
+    Maintained with the help of <a href="https://docs.openclaw.ai">OpenClaw</a> &#x1f99e;
+  </footer>
+  <script is:inline>
+    function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-theme'),n=c==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('theme',n);updateBtn(n)}
+    function updateBtn(t){document.getElementById('themeBtn').textContent=t==='dark'?'Light':'Dark'}
+    var s=localStorage.getItem('theme')||'dark';document.documentElement.setAttribute('data-theme',s);updateBtn(s);
+    document.addEventListener('DOMContentLoaded',function(){
+      document.querySelectorAll('pre').forEach(function(pre){
+        var btn=document.createElement('button');btn.className='copy-btn';btn.textContent='Copy';
+        btn.addEventListener('click',function(){var code=pre.querySelector('code');navigator.clipboard.writeText(code.textContent).then(function(){btn.textContent='Copied!';btn.classList.add('copied');setTimeout(function(){btn.textContent='Copy';btn.classList.remove('copied')},2000)})});
+        pre.style.position='relative';pre.appendChild(btn)
+      });
+      var obs=new IntersectionObserver(function(entries){entries.forEach(function(e){if(e.isIntersecting){document.querySelectorAll('.sidebar a').forEach(function(a){a.classList.remove('active')});var link=document.querySelector('.sidebar a[href="#'+e.target.id+'"]');if(link)link.classList.add('active')}})},{rootMargin:'-80px 0px -80% 0px'});
+      document.querySelectorAll('.content h1[id],.content h2[id]').forEach(function(h){obs.observe(h)});
+    });
+  </script>
+</body>
+</html>
