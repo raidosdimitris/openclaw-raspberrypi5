@@ -46,6 +46,127 @@ This guide follows an **assume-breach** security posture: we design the setup so
 | Isolation router | GL.iNET GL-MT300N-V2 (Mango) | Portable VPN router, OpenWrt, 100 Mbps Ethernet |
 | Networking | Ethernet cables × 2 | Main router → Mango WAN, Mango LAN → Pi |
 
+## 🏗️ Architecture Visual — What's Running on the Pi
+
+The diagram below shows how the secure OpenClaw setup is structured on the Raspberry Pi 5. Two users, strict permission boundaries, Docker sandboxing, and localhost-only binding work together to contain risk.
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        🍓 RASPBERRY PI 5  (isolated network)                 │
+│                                                                              │
+│  ┌──────────────────────────────────┐  ┌──────────────────────────────────┐  │
+│  │  👤 ADMIN USER (e.g. clawadmin)  │  │  🤖 OPENCLAW USER (openclaw)      │  │
+│  │                                  │  │                                  │  │
+│  │  • Has sudo privileges           │  │  • NO sudo — unprivileged        │  │
+│  │  • Installs system packages      │  │  • Runs the OpenClaw gateway     │  │
+│  │  • Manages UFW, fail2ban, Docker │  │  • Owns all OpenClaw files       │  │
+│  │  • SSH key-only access           │  │  • Member of docker group        │  │
+│  │                                  │  │                                  │  │
+│  │  ~/.ssh/authorized_keys          │  │  ~/.openclaw/                    │  │
+│  │                                  │  │  ├── openclaw.json  (600)  🔑    │  │
+│  │                                  │  │  │   ├── Anthropic API key       │  │
+│  │                                  │  │  │   ├── Gateway auth token      │  │
+│  │                                  │  │  │   └── Telegram bot token      │  │
+│  │                                  │  │  ├── .env  (600)                 │  │
+│  │                                  │  │  │   ├── BRAVE_API_KEY           │  │
+│  │                                  │  │  │   └── GITHUB_TOKEN            │  │
+│  │                                  │  │  ├── credentials/  (700)         │  │
+│  │                                  │  │  └── workspace/  (rw)     📂     │  │
+│  │                                  │  │      ├── SOUL.md                 │  │
+│  │                                  │  │      ├── AGENTS.md               │  │
+│  │                                  │  │      ├── USER.md                 │  │
+│  │                                  │  │      ├── memory/                 │  │
+│  │                                  │  │      └── reports/                │  │
+│  │                                  │  │                                  │  │
+│  │                                  │  │  ~/.git-credentials  (600)  🔑   │  │
+│  │                                  │  │  ~/.config/rclone/  (600)   🔑   │  │
+│  └──────────────────────────────────┘  └──────────────────────────────────┘  │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │              ⚙️  OPENCLAW GATEWAY  (systemd user service)              │  │
+│  │                                                                        │  │
+│  │  • Bound to localhost only (127.0.0.1:18789)                           │  │
+│  │  • Token-authenticated                                                 │  │
+│  │  • Connects to Anthropic API (Claude) over the internet                │  │
+│  │  • Connects to Ollama (localhost:11434) for local models               │  │
+│  │  • Receives messages from Telegram (polling, DM allowlist only)        │  │
+│  │  • Browser tool runs HERE on the host (not in sandbox)                 │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                          │                                   │
+│                             OpenClaw sends tool                              │
+│                             execution requests ▼                             │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │           🐳 DOCKER SANDBOX  (sandbox.mode: "all")                     │  │
+│  │                                                                        │  │
+│  │  Every tool call (exec, read, write, edit) runs inside                 │  │
+│  │  an isolated Docker container — never on the host directly.            │  │
+│  │                                                                        │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐    │  │
+│  │  │            📦 Container (per session)                          │    │  │
+│  │  │                                                                │    │  │
+│  │  │  • Runs as non-root user "claw" (UID matches host)             │    │  │
+│  │  │  • Image: openclaw-sandbox:gdrive (Debian + Node.js + rclone)  │    │  │
+│  │  │  • Network: bridge (outbound internet for npm/pip)             │    │  │
+│  │  │                                                                │    │  │
+│  │  │  ✅ Can read/write  ~/workspace  (bind-mounted)                │    │  │
+│  │  │  ✅ Can run shell commands, install packages                   │    │  │
+│  │  │  ✅ Can git push (GITHUB_TOKEN injected via env)               │    │  │
+│  │  │  ✅ Can rclone to Google Drive (config bind-mounted :ro)       │    │  │
+│  │  │                                                                │    │  │
+│  │  │  ❌ Cannot access ~/.openclaw/openclaw.json (API keys)         │    │  │
+│  │  │  ❌ Cannot access host filesystem outside workspace            │    │  │
+│  │  │  ❌ Cannot modify OpenClaw config or gateway                   │    │  │
+│  │  │  ❌ Cannot use elevated/escape-to-host mode (disabled)         │    │  │
+│  │  └────────────────────────────────────────────────────────────────┘    │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ┌─────────────────────────────┐  ┌───────────────────────────────────────┐  │
+│  │  🔥 UFW FIREWALL            │  │  🦙 OLLAMA (system service)            │  │
+│  │                             │  │                                       │  │
+│  │  Default: deny incoming     │  │  localhost:11434                      │  │
+│  │  Allow: SSH from laptop     │  │  Models: qwen3:1.7b, qwen3:8b,        │  │
+│  │  Allow: SSH via Tailscale   │  │          gemma3:1b                    │  │
+│  │  Allow: Tailscale Serve     │  │  Used as fallback only —              │  │
+│  └─────────────────────────────┘  │  Claude handles all tool work         │  │
+│                                   └───────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+                              ▲                    │
+                              │                    ▼
+                    Tailscale SSH           Outbound only:
+                    + Serve (HTTPS)         • Anthropic API (Claude)
+                              ▲             • GitHub (dedicated account)
+                              │             • Brave Search API
+                    ┌─────────┴───────────┐ • Google Drive (dummy account)
+                    │  💻 YOUR LAPTOP     │
+                    │  (main home WiFi)   │
+                    │                     │
+                    │  Access methods:    │
+                    │  • SSH via Tailscale│
+                    │  • Control UI       │
+                    │  • Telegram app     │
+                    │                     │
+                    │  ❌ Cannot reach Pi │
+                    │  via local network  │
+                    │  (isolation works)  │
+                    └─────────────────────┘
+```
+
+
+### Key security boundaries
+
+| Boundary | What it enforces |
+|---|---|
+| **Network isolation** (GL.iNet router) | Pi on separate subnet — your home devices can't reach it and it can't reach them |
+| **Localhost binding** | Gateway only accepts connections from the Pi itself (127.0.0.1) |
+| **User separation** | `openclaw` user has no sudo — can't install packages or change system config |
+| **File permissions** (600/700) | API keys and tokens readable only by the `openclaw` user |
+| **Docker sandbox** (mode: all) | Every tool execution runs in a disposable container, not on the host |
+| **Elevated mode disabled** | No escape hatch from sandbox to host |
+| **DM allowlist** | Only your Telegram user ID can message the bot |
+| **Dedicated accounts** | GitHub and Google Drive use throwaway accounts — not your personal ones |
+
 ## 📋 Found an issue?
 
 If you spot an inconsistency, error, or outdated step in this installation guide, please [open an issue](https://github.com/raidosdimitris/openclaw-raspberrypi5/issues/new) and assign it to [`@jarvis-openclaw-assistant`](https://github.com/jarvis-openclaw-assistant). The OpenClaw agent monitoring this repo will pick it up and work on a fix.
