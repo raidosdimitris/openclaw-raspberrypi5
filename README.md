@@ -52,34 +52,34 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                        🍓 RASPBERRY PI 5  (isolated network)                │
+│                        🍓 RASPBERRY PI 5  (isolated network)                 │
 │                                                                              │
 │  ┌──────────────────────────────────┐  ┌──────────────────────────────────┐  │
-│  │  👤 ADMIN USER (e.g. clawadmin)  │  │  🤖 OPENCLAW USER (openclaw)    │  │
+│  │  👤 ADMIN USER (e.g. clawadmin)  │  │  🤖 OPENCLAW USER (openclaw)      │  │
 │  │                                  │  │                                  │  │
-│  │  • Has sudo privileges           │  │  • NO sudo — unprivileged       │  │
-│  │  • Installs system packages      │  │  • Runs the OpenClaw gateway    │  │
-│  │  • Manages UFW, fail2ban, Docker │  │  • Owns all OpenClaw files      │  │
-│  │  • SSH key-only access           │  │  • Member of docker group       │  │
+│  │  • Has sudo privileges           │  │  • NO sudo — unprivileged        │  │
+│  │  • Installs system packages      │  │  • Runs the OpenClaw gateway     │  │
+│  │  • Manages UFW, fail2ban, Docker │  │  • Owns all OpenClaw files       │  │
+│  │  • SSH key-only access           │  │  • Member of docker group        │  │
 │  │                                  │  │                                  │  │
-│  │  ~/.ssh/authorized_keys          │  │  ~/.openclaw/                   │  │
-│  │                                  │  │  ├── openclaw.json  (600)  🔑   │  │
-│  │                                  │  │  │   ├── Anthropic API key      │  │
-│  │                                  │  │  │   ├── Gateway auth token     │  │
-│  │                                  │  │  │   └── Telegram bot token     │  │
-│  │                                  │  │  ├── .env  (600)               │  │
-│  │                                  │  │  │   ├── BRAVE_API_KEY          │  │
-│  │                                  │  │  │   └── GITHUB_TOKEN           │  │
-│  │                                  │  │  ├── credentials/  (700)       │  │
-│  │                                  │  │  └── workspace/  (rw)     📂   │  │
-│  │                                  │  │      ├── SOUL.md               │  │
-│  │                                  │  │      ├── AGENTS.md             │  │
-│  │                                  │  │      ├── USER.md               │  │
-│  │                                  │  │      ├── memory/               │  │
-│  │                                  │  │      └── reports/              │  │
+│  │  ~/.ssh/authorized_keys          │  │  ~/.openclaw/                    │  │
+│  │                                  │  │  ├── openclaw.json  (600)  🔑    │  │
+│  │                                  │  │  │   ├── Anthropic API key       │  │
+│  │                                  │  │  │   ├── Gateway auth token      │  │
+│  │                                  │  │  │   └── Telegram bot token      │  │
+│  │                                  │  │  ├── .env  (600)                 │  │
+│  │                                  │  │  │   ├── BRAVE_API_KEY           │  │
+│  │                                  │  │  │   └── GITHUB_TOKEN            │  │
+│  │                                  │  │  ├── credentials/  (700)         │  │
+│  │                                  │  │  └── workspace/  (rw)     📂     │  │
+│  │                                  │  │      ├── SOUL.md                 │  │
+│  │                                  │  │      ├── AGENTS.md               │  │
+│  │                                  │  │      ├── USER.md                 │  │
+│  │                                  │  │      ├── memory/                 │  │
+│  │                                  │  │      └── reports/                │  │
 │  │                                  │  │                                  │  │
-│  │                                  │  │  ~/.git-credentials  (600)  🔑  │  │
-│  │                                  │  │  ~/.config/rclone/  (600)   🔑  │  │
+│  │                                  │  │  ~/.git-credentials  (600)  🔑   │  │
+│  │                                  │  │  ~/.config/rclone/  (600)   🔑   │  │
 │  └──────────────────────────────────┘  └──────────────────────────────────┘  │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
@@ -105,16 +105,16 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 │  │  ┌────────────────────────────────────────────────────────────────┐    │  │
 │  │  │            📦 Container (per session)                          │    │  │
 │  │  │                                                                │    │  │
-│  │  │  • Runs as non-root user "claw" (UID matches host)            │    │  │
-│  │  │  • Image: openclaw-sandbox:gdrive (Debian + Node.js + rclone) │    │  │
+│  │  │  • Runs as non-root user "claw" (UID matches host)             │    │  │
+│  │  │  • Image: openclaw-sandbox:gdrive (Debian + Node.js + rclone)  │    │  │
 │  │  │  • Network: bridge (outbound internet for npm/pip)             │    │  │
 │  │  │                                                                │    │  │
-│  │  │  ✅ Can read/write  ~/workspace  (bind-mounted)               │    │  │
+│  │  │  ✅ Can read/write  ~/workspace  (bind-mounted)                │    │  │
 │  │  │  ✅ Can run shell commands, install packages                   │    │  │
 │  │  │  ✅ Can git push (GITHUB_TOKEN injected via env)               │    │  │
 │  │  │  ✅ Can rclone to Google Drive (config bind-mounted :ro)       │    │  │
 │  │  │                                                                │    │  │
-│  │  │  ❌ Cannot access ~/.openclaw/openclaw.json (API keys)        │    │  │
+│  │  │  ❌ Cannot access ~/.openclaw/openclaw.json (API keys)         │    │  │
 │  │  │  ❌ Cannot access host filesystem outside workspace            │    │  │
 │  │  │  ❌ Cannot modify OpenClaw config or gateway                   │    │  │
 │  │  │  ❌ Cannot use elevated/escape-to-host mode (disabled)         │    │  │
@@ -122,35 +122,35 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
 │  ┌─────────────────────────────┐  ┌───────────────────────────────────────┐  │
-│  │  🔥 UFW FIREWALL            │  │  🦙 OLLAMA (system service)           │  │
+│  │  🔥 UFW FIREWALL            │  │  🦙 OLLAMA (system service)            │  │
 │  │                             │  │                                       │  │
 │  │  Default: deny incoming     │  │  localhost:11434                      │  │
-│  │  Allow: SSH from laptop     │  │  Models: qwen3:1.7b, qwen3:8b,      │  │
+│  │  Allow: SSH from laptop     │  │  Models: qwen3:1.7b, qwen3:8b,        │  │
 │  │  Allow: SSH via Tailscale   │  │          gemma3:1b                    │  │
-│  │  Allow: Tailscale Serve     │  │  Used as fallback only —             │  │
-│  └─────────────────────────────┘  │  Claude handles all tool work        │  │
-│                                    └───────────────────────────────────────┘  │
+│  │  Allow: Tailscale Serve     │  │  Used as fallback only —              │  │
+│  └─────────────────────────────┘  │  Claude handles all tool work         │  │
+│                                   └───────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────┘
 
                               ▲                    │
                               │                    ▼
-                    Tailscale SSH          Outbound only:
-                    + Serve (HTTPS)        • Anthropic API (Claude)
-                              ▲            • GitHub (dedicated account)
-                              │            • Brave Search API
-                    ┌─────────┴──────────┐ • Google Drive (dummy account)
+                    Tailscale SSH           Outbound only:
+                    + Serve (HTTPS)         • Anthropic API (Claude)
+                              ▲             • GitHub (dedicated account)
+                              │             • Brave Search API
+                    ┌─────────┴───────────┐ • Google Drive (dummy account)
                     │  💻 YOUR LAPTOP     │
-                    │  (main home WiFi)  │
-                    │                    │
-                    │  Access methods:   │
+                    │  (main home WiFi)   │
+                    │                     │
+                    │  Access methods:    │
                     │  • SSH via Tailscale│
-                    │  • Control UI      │
-                    │  • Telegram app    │
-                    │                    │
+                    │  • Control UI       │
+                    │  • Telegram app     │
+                    │                     │
                     │  ❌ Cannot reach Pi │
-                    │  via local network │
-                    │  (isolation works) │
-                    └────────────────────┘
+                    │  via local network  │
+                    │  (isolation works)  │
+                    └─────────────────────┘
 ```
 
 
