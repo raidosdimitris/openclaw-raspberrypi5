@@ -68,7 +68,6 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 │  │                                  │  │  │   ├── Gateway auth token      │  │
 │  │                                  │  │  │   └── Telegram bot token      │  │
 │  │                                  │  │  ├── .env  (600)                 │  │
-│  │                                  │  │  │   ├── BRAVE_API_KEY           │  │
 │  │                                  │  │  │   └── GITHUB_TOKEN            │  │
 │  │                                  │  │  ├── credentials/  (700)         │  │
 │  │                                  │  │  └── workspace/  (rw)     📂     │  │
@@ -88,25 +87,27 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 │  │  • Bound to localhost only (127.0.0.1:18789)                           │  │
 │  │  • Token-authenticated                                                 │  │
 │  │  • Connects to Anthropic API (Claude) over the internet                │  │
-│  │  • Connects to Ollama (localhost:11434) for local models               │  │
+│  │  • Connects to Ollama (<DOCKER_BRIDGE_IP>:11434) for local models      │  │
 │  │  • Receives messages from Telegram (polling, DM allowlist only)        │  │
-│  │  • Browser tool runs HERE on the host (not in sandbox)                 │  │
+│  │  • Browser tool (Chromium) runs HERE on the host (not in sandbox)      │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                          │                                   │
 │                             OpenClaw sends tool                              │
 │                             execution requests ▼                             │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │           🐳 DOCKER SANDBOX  (sandbox.mode: "all")                     │  │
+│  │       🐳 DOCKER SANDBOX  (sandbox.mode: "non-main")                    │  │
 │  │                                                                        │  │
-│  │  Every tool call (exec, read, write, edit) runs inside                 │  │
-│  │  an isolated Docker container — never on the host directly.            │  │
+│  │  Sub-agent and spawned session tool calls run inside                   │  │
+│  │  isolated Docker containers. The main session runs on                  │  │
+│  │  the host for browser/Chromium access.                                 │  │
 │  │                                                                        │  │
 │  │  ┌────────────────────────────────────────────────────────────────┐    │  │
 │  │  │            📦 Container (per session)                          │    │  │
 │  │  │                                                                │    │  │
 │  │  │  • Runs as non-root user "claw" (UID matches host)             │    │  │
 │  │  │  • Image: openclaw-sandbox:gdrive (Debian + Node.js + rclone)  │    │  │
+│  │  │  • Browser: openclaw-sandbox-browser:bookworm-slim             │    │  │
 │  │  │  • Network: bridge (outbound internet for npm/pip)             │    │  │
 │  │  │                                                                │    │  │
 │  │  │  ✅ Can read/write  ~/workspace  (bind-mounted)                │    │  │
@@ -125,8 +126,8 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 │  │  🔥 UFW FIREWALL            │  │  🦙 OLLAMA (system service)            │  │
 │  │                             │  │                                       │  │
 │  │  Default: deny incoming     │  │  localhost:11434                      │  │
-│  │  Allow: SSH from laptop     │  │  Models: qwen3:1.7b, qwen3:8b,        │  │
-│  │  Allow: SSH via Tailscale   │  │          gemma3:1b                    │  │
+│  │  Allow: SSH from laptop     │  │  Models: qwen3:8b, gemma3:4b,          │  │
+│  │  Allow: SSH via Tailscale   │  │          gemma3:1b, qwen3-vl:2b       │  │
 │  │  Allow: Tailscale Serve     │  │  Used as fallback only —              │  │
 │  └─────────────────────────────┘  │  Claude handles all tool work         │  │
 │                                   └───────────────────────────────────────┘  │
@@ -137,7 +138,6 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
                     Tailscale SSH           Outbound only:
                     + Serve (HTTPS)         • Anthropic API (Claude)
                               ▲             • GitHub (dedicated account)
-                              │             • Brave Search API
                     ┌─────────┴───────────┐ • Google Drive (dummy account)
                     │  💻 YOUR LAPTOP     │
                     │  (main home WiFi)   │
@@ -162,7 +162,7 @@ The diagram below shows how the secure OpenClaw setup is structured on the Raspb
 | **Localhost binding** | Gateway only accepts connections from the Pi itself (127.0.0.1) |
 | **User separation** | `openclaw` user has no sudo — can't install packages or change system config |
 | **File permissions** (600/700) | API keys and tokens readable only by the `openclaw` user |
-| **Docker sandbox** (mode: all) | Every tool execution runs in a disposable container, not on the host |
+| **Docker sandbox** (mode: non-main) | Sub-agent and spawned session tool calls run in disposable containers; the main session runs on the host for browser/Chromium access |
 | **Elevated mode disabled** | No escape hatch from sandbox to host |
 | **DM allowlist** | Only your Telegram user ID can message the bot |
 | **Dedicated accounts** | GitHub and Google Drive use throwaway accounts — not your personal ones |
