@@ -7,10 +7,10 @@
 - [Phase 1 — Network Preparation](#phase-1--network-preparation): Physical network layout with a GL.iNet Mango router, creating an isolated subnet, hardening the router, and configuring laptop network profiles.
 - [Phase 2a — Raspberry Pi OS Installation](#phase-2a--raspberry-pi-os-installation--hardening): Flashing the OS, SSH key setup, first boot, migrating to NVMe SSD.
 - [Phase 2b — Raspberry Pi OS Hardening](#phase-2b--raspberry-pi-os-hardening): Locking down SSH, firewall (UFW), fail2ban, creating the dedicated `openclaw` user, disabling unnecessary services, automatic security updates, swap verification, static IP.
-- [Phase 3 — Ollama Installation & Local Model Setup](#phase-3--ollama-installation--local-model-setup): Installing Ollama, downloading local models (`qwen3:1.7b`, `qwen3:8b`, `gemma3:1b`), context window tuning, security considerations for local models.
-- [Phase 4 — OpenClaw Installation & Security Hardening](#phase-4--openclaw-installation--security-hardening): Installing dependencies (Node.js, Docker), installing OpenClaw, running the onboarding wizard, building the sandbox Docker image, hardening the configuration, security audit.
+- [Phase 3 — Ollama Installation & Local Model Setup](#phase-3--ollama-installation--local-model-setup): Installing Ollama, downloading local models (`qwen3:8b`, `gemma3:4b`, `gemma3:1b`), context window tuning, security considerations for local models.
+- [Phase 4 — OpenClaw Installation & Security Hardening](#phase-4--openclaw-installation--security-hardening): Installing dependencies (Node.js, Docker), installing OpenClaw, running the onboarding wizard, building the sandbox Docker image, installing Chromium, hardening the configuration (sandbox mode `non-main`, browser, context pruning), security audit.
 - [Phase 5 — Telegram Channel Setup & Local Model Configuration](#phase-5--telegram-channel-setup--local-model-configuration): Creating a Telegram bot, configuring the DM allowlist, enabling the Telegram plugin, registering Ollama models as explicit providers.
-- [Phase 6 — Setting Up OpenClaw for Coding & Research](#phase-6--setting-up-openclaw-for-coding--research): Dedicated GitHub account, workspace backup, Brave Search API, sandbox GitHub credentials, full coding workflow test, safe review habits.
+- [Phase 6 — Setting Up OpenClaw for Coding & Research](#phase-6--setting-up-openclaw-for-coding--research): Dedicated GitHub account, workspace backup, optional Brave Search API, sandbox GitHub credentials with dynamic credential helper, full coding workflow test, safe review habits.
 - [Phase 6.5 — Google Drive Access for Document Sharing](#phase-65-google-drive-access-for-document-sharing): Installing rclone, authenticating with a dummy Google account, custom sandbox image with rclone, bind-mounting credentials, testing uploads.
 - [Phase 7 — Ongoing Maintenance & Monitoring](#phase-7--ongoing-maintenance--monitoring): Maintenance checklist (rotation schedules, updates, backups) and incident response protocol. *(Detailed walkthroughs planned for a future update.)*
 - [Phase 8 — Tailscale Remote Access & Control UI Setup](#phase-8-tailscale-remote-access--control-ui-setup): Installing Tailscale, Tailscale Serve for the Control UI, firewall rules for Tailscale SSH, device pairing, convenience aliases.
@@ -159,7 +159,7 @@ No single layer is perfect. Together, they make a breach very hard to turn into 
 | **Network isolation** (VLAN / guest network) | Pi cannot communicate with personal devices | Compromised Pi scanning/attacking your main network |
 | **Localhost binding** (`gateway.bind: "loopback"`) | OpenClaw only accepts connections from the Pi itself | Attackers on the network connecting to the gateway |
 | **Firewall (UFW)** | Blocks all unexpected incoming connections at the OS level | Port scanning, unauthorized access attempts |
-| **Docker sandboxing** (`sandbox.mode: "all"`) | Tool commands run in isolated containers, not on the real Pi | Malicious commands accessing the Pi's real file system, API keys, or config |
+| **Docker sandboxing** (`sandbox.mode: "non-main"`) | Sub-agent tool commands run in isolated containers; main session runs on host for browser access | Malicious commands accessing the Pi's real file system, API keys, or config |
 | **Tool policy** (`tools.allow` / `tools.deny`) | OpenClaw can only use specifically permitted tools | Agent using tools you didn't intend to expose |
 | **Exec approvals** | Destructive or system-altering commands require your confirmation | Agent running dangerous commands without oversight |
 | **DM allowlist** (`dmPolicy: "allowlist"`) | Only your account can message OpenClaw | Strangers sending commands or prompt injections via DM |
@@ -231,8 +231,8 @@ These layers are evaluated in order: tool policy first (is it allowed?), then sa
 | Mode | Behavior | Recommended for |
 |------|----------|-----------------|
 | `"off"` | Everything runs directly on the Pi | **Not recommended** |
-| `"non-main"` | Your primary chat session runs on the host; all other sessions run sandboxed | Reasonable middle ground |
-| `"all"` | Everything runs in containers | **Maximum isolation — recommended for this setup** |
+| `"non-main"` | Your primary chat session runs on the host; all other sessions (sub-agents) run sandboxed | **Recommended for this setup** — the main session needs host access for browser/Chromium, while sub-agents remain fully isolated |
+| `"all"` | Everything runs in containers | Maximum isolation — use if you don't need the browser tool |
 
 ### Honest caveat from the docs
 
@@ -260,8 +260,9 @@ This is what the completed setup will look like:
 │                                                  │
 │   🍓 Raspberry Pi 5 (16 GB RAM, 1 TB NVMe)     │
 │   ├── OpenClaw (gateway bound to localhost only) │
+│   ├── Chromium (headless browser for web tasks)  │
 │   ├── Ollama (local AI model for light tasks)    │
-│   ├── Docker (sandbox for tool execution)        │
+│   ├── Docker (sandbox for sub-agent execution)   │
 │   ├── UFW Firewall (deny all incoming)           │
 │   └── Signal / Telegram (channel to you)         │
 │                                                  │
@@ -2044,11 +2045,33 @@ Delete all existing content and replace with the following. **You must replace `
     "redactSensitive": "tools"
   },
 
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+
+  "contextPruning": {
+    "mode": "cache-ttl",
+    "ttl": "1h"
+  },
+
+  "memorySearch": {
+    "enabled": false
+  },
+
   "agents": {
     "defaults": {
       "maxConcurrent": 4,
       "subagents": {
         "maxConcurrent": 8
+      },
+      "models": {
+        "aliases": {
+          "opus": "anthropic/claude-opus-4-6"
+        },
+        "cacheRetention": "long"
       },
       "compaction": {
         "mode": "safeguard"
@@ -2061,17 +2084,21 @@ Delete all existing content and replace with the following. **You must replace `
         "every": "0m"
       },
       "sandbox": {
-        "mode": "all",
+        "mode": "non-main",
         "scope": "session",
         "workspaceAccess": "rw",
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
           "network": "bridge",
           "readOnlyRoot": false,
-          "user": "<OPENCLAW_UID>:<OPENCLAW_UID>"
+          "user": "<OPENCLAW_UID>:<OPENCLAW_UID>",
+          "setupCommand": "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'"
         },
         "browser": {
-          "enabled": false
+          "enabled": true,
+          "image": "openclaw-sandbox-browser:bookworm-slim",
+          "headless": true,
+          "allowHostControl": true
         }
       }
     }
@@ -2087,7 +2114,6 @@ Delete all existing content and replace with the following. **You must replace `
       "apply_patch",
       "group:sessions",
       "group:memory",
-      "web_search",
       "web_fetch",
       "browser"
     ],
@@ -2095,8 +2121,18 @@ Delete all existing content and replace with the following. **You must replace `
       "canvas",
       "nodes",
       "cron",
-      "gateway"
+      "gateway",
+      "web_search"
     ],
+    "sandbox": {
+      "tools": {
+        "allow": [
+          "image",
+          "subagents",
+          "browser"
+        ]
+      }
+    },
     "elevated": {
       "enabled": false
     }
@@ -2160,17 +2196,27 @@ Save and exit nano: `Ctrl+O`, `Enter`, `Ctrl+X`.
 
 | Setting | Value | Purpose |
 |---|---|---|
+| `commands.native` | `"auto"` | Enables native slash commands (like `/restart`, `/status`) that OpenClaw recognises automatically. |
+| `commands.restart` | `true` | Allows the `/restart` command via the messaging channel. |
+| `contextPruning.mode` | `"cache-ttl"` | Prunes cached context after the configured TTL, reducing memory and token usage. |
+| `contextPruning.ttl` | `"1h"` | Context older than 1 hour is pruned from the cache. |
+| `memorySearch.enabled` | `false` | Disables automatic memory search — memory files are loaded explicitly via workspace context instead. |
 | `logging.redactSensitive` | `"tools"` | Strips API keys and sensitive data from tool execution logs. |
+| `agents.defaults.models.aliases` | `{"opus": "..."}` | Creates a short alias so you can switch models with `/model opus` instead of typing the full identifier. |
+| `agents.defaults.models.cacheRetention` | `"long"` | Keeps model response caches longer, reducing redundant API calls. |
 | `agents.defaults.model.primary` | `"anthropic/claude-opus-4-6"` | Explicitly sets the strongest model. Stronger models are significantly harder to manipulate via prompt injection. |
 | `agents.defaults.heartbeat.every` | `"0m"` | Disables periodic heartbeat check-ins. Saves API tokens when idle; OpenClaw only responds when you message it. |
-| `agents.defaults.sandbox.mode` | `"all"` | **Every** tool execution runs inside an isolated Docker container — not on the host Pi. |
+| `agents.defaults.sandbox.mode` | `"non-main"` | Sub-agent and spawned sessions run inside Docker containers. The main session runs on the host, giving it direct access to Chromium and the browser tool. This is a reasonable relaxation — the main session is controlled exclusively by you (via the DM allowlist), while sub-agents (which may process untrusted content) remain fully sandboxed. |
 | `agents.defaults.sandbox.scope` | `"session"` | Each conversation gets its own container. One compromised session cannot affect another. |
 | `agents.defaults.sandbox.workspaceAccess` | `"rw"` | The sandbox can read/write the workspace folder (required for coding tasks). |
 | `agents.defaults.sandbox.docker.network` | `"bridge"` | Allows internet access inside the sandbox (needed for `npm install`, `pip install`, etc.). Uses Docker's default isolated network. |
 | `agents.defaults.sandbox.docker.image` | `"openclaw-sandbox:bookworm-slim"` | Uses the custom sandbox image built in Step 15, which includes Node.js 22 and runs as a non-root user matching the host `openclaw` UID. |
-| `agents.defaults.sandbox.browser.enabled` | `false` | The browser runs on the **host**, not inside Docker. Setting this to `false` is correct — it prevents the sandbox from trying to proxy browser commands through the container, which would break isolation. The browser tool itself is enabled separately at the host level (`browser.enabled: true`). |
-| `tools.allow` | (explicit list) | Allowlist of permitted tools: shell commands, file I/O, sessions, memory, web search, web fetch, and browser. Only these tools are available — everything else is blocked. |
-| `tools.deny` | (explicit list) | Blocklist as a second layer: canvas, node commands, cron, and gateway control are hard-blocked. |
+| `agents.defaults.sandbox.docker.setupCommand` | (git credential helper) | Configures a dynamic Git credential helper inside sandbox containers so they can push to GitHub using `$GITHUB_TOKEN` without storing plaintext credentials in `.git-credentials`. More robust than the raw token approach. |
+| `agents.defaults.sandbox.browser.enabled` | `true` | Enables the sandbox browser for sub-agent sessions. Uses a dedicated browser image (`openclaw-sandbox-browser:bookworm-slim`) that runs Chromium inside the container. |
+| `agents.defaults.sandbox.browser.allowHostControl` | `true` | Allows sandbox sessions to request browser actions on the host when the sandbox browser is unavailable. |
+| `tools.allow` | (explicit list) | Allowlist of permitted tools: shell commands, file I/O, sessions, memory, web fetch, and browser. Only these tools are available — everything else is blocked. Note: `web_search` is not included (requires Brave API key — see optional section in Phase 6). |
+| `tools.deny` | (explicit list) | Blocklist as a second layer: canvas, node commands, cron, gateway control, and web search are hard-blocked. |
+| `tools.sandbox.tools` | (allow list) | Separate tool allowlist for sandbox sessions — includes `image`, `subagents`, and `browser`. |
 | `tools.elevated.enabled` | `false` | Disables "elevated mode" — a feature that lets tool execution escape the sandbox. We never want this. |
 
 ### Step 20 — Disable Bonjour / mDNS discovery
@@ -2189,21 +2235,56 @@ chmod 600 ~/.openclaw/.env
 
 > This file will later hold API keys (Brave Search, GitHub). Setting `600` ensures only the `openclaw` user can read it — matching the protection on `openclaw.json`.
 
-### Step 21 — Enable the browser tool
+### Step 21 — Install Chromium on the host
+
+The browser tool requires Chromium to be installed on the host. Switch to your admin user session:
+
+```bash
+ssh <ADMIN_USER>@<RASPBERRY_PI_IP>
+```
+
+Install Chromium:
+
+```bash
+sudo apt install -y chromium
+```
+
+Verify installation:
+
+```bash
+chromium --version
+```
+
+Expected: Something like `Chromium 146.x.x.x`.
+
+Return to your `openclaw` user session for the remaining steps.
+
+### Step 22 — Enable and configure the browser tool
 
 The browser tool gives OpenClaw full Chromium browser control for research
 tasks — visiting websites, reading JavaScript-rendered pages, and extracting
 content that `web_fetch` (plain HTTP) cannot handle.
 
+Enable the browser and configure it for headless operation on the Pi:
+
 ```bash
 openclaw config set browser.enabled true --json
+openclaw config set browser.headless true --json
+openclaw config set browser.noSandbox true --json
 ```
 
+> **Note:** `noSandbox: true` refers to **Chromium's own internal sandboxing**,
+> not OpenClaw's Docker sandbox. On a headless Raspberry Pi without a display
+> server, Chromium's sandbox requires additional kernel features that are
+> not available. Disabling it is standard practice for headless Chromium on
+> servers and embedded devices. OpenClaw's Docker sandbox (which isolates
+> sub-agent sessions) is a separate, independent security layer.
+
 > ⚠️ **Security Note — The browser runs on the host, not in the sandbox.**
-> Unlike `exec`, `read`, and `write` (which run inside Docker containers),
-> the browser tool launches a Chromium process directly on the Pi. The
-> OpenClaw sandboxing docs state this explicitly: enabling `browser` inside
-> sandbox settings "breaks isolation."
+> Unlike `exec`, `read`, and `write` (which run inside Docker containers
+> in `non-main` mode), the browser tool launches a Chromium process directly
+> on the Pi. This is why `sandbox.mode` is set to `"non-main"` — the main
+> session needs host access to control the browser.
 >
 > This makes the browser the highest-risk tool in your setup. It is the
 > primary vector for the **Indirect Injection via Fetched Content** attack
@@ -2216,29 +2297,35 @@ openclaw config set browser.enabled true --json
 >   exfiltrated, it cannot reach your personal devices)
 > - DM allowlist (only you can instruct OpenClaw to browse)
 > - Claude as the primary model (strongest prompt injection resistance)
-> - `sandbox.browser.enabled: false` in the config (the browser runs on
->   the host with its own isolation, not inside the weaker Docker sandbox)
+> - Sub-agents remain fully sandboxed in Docker containers
+> - Sandbox browser (`openclaw-sandbox-browser:bookworm-slim`) runs
+>   Chromium inside the container for sandboxed sessions
 >
 > **If you later decide you don't need JavaScript rendering for research:**
 > Run `openclaw config set browser.enabled false --json` and remove
-> `"browser"` from `tools.allow`. OpenClaw will still have `web_search`
-> (Brave API) and `web_fetch` (plain HTTP + readability extraction).
+> `"browser"` from `tools.allow`. OpenClaw will still have `web_fetch`
+> (plain HTTP + readability extraction). If you also have Brave Search
+> configured (optional), `web_search` will remain available.
 
 ### How OpenClaw's three web tools differ
 
-| Tool | What it does | JavaScript? | Runs where | Risk level |
-|---|---|---|---|---|
-| `web_search` | Searches the web via Brave Search API. Returns titles, URLs, snippets. | No | Gateway process | Low — only returns search metadata |
-| `web_fetch` | HTTP GET on a URL. Extracts readable text (HTML → markdown). | No | Gateway process | Medium — reads page content, but no JS execution |
-| `browser` | Full Chromium automation. Can click, scroll, fill forms, execute JS, take screenshots. | Yes | **Host** (not sandbox) | **Higher** — interacts with live web pages that may contain adversarial content |
+| Tool | What it does | API key needed? | JavaScript? | Runs where | Risk level |
+|---|---|---|---|---|---|
+| `web_fetch` | HTTP GET on a URL. Extracts readable text (HTML → markdown). | No — free, built-in | No | Gateway process | Medium — reads page content, but no JS execution |
+| `browser` | Full Chromium automation. Can click, scroll, fill forms, execute JS, take screenshots. | No — uses local Chromium | Yes | **Host** (main session) or **sandbox** (sub-agents) | **Higher** — interacts with live web pages that may contain adversarial content |
+| `web_search` | Searches the web via Brave Search API. Returns titles, URLs, snippets. | **Yes** — Brave API key | No | Gateway process | Low — only returns search metadata |
 
 For most research tasks (literature reviews, reading articles, checking
-competitor pages), `web_search` + `web_fetch` will handle 80–90% of
-needs. The `browser` tool is needed when a site requires JavaScript to
-render its content (single-page apps, dynamic dashboards, pages behind
-cookie consent walls).
+competitor pages), `browser` + `web_fetch` cover all web access needs
+without any API keys. The `browser` tool handles JavaScript-heavy sites
+(single-page apps, dynamic dashboards, pages behind cookie consent walls),
+while `web_fetch` is faster for simple page reads.
 
-### Step 22 — Lock down file permissions
+`web_search` (Brave Search API) adds structured search-engine-style results
+but requires an API key and is optional. See Phase 6 Part 2 for setup
+instructions if you want it.
+
+### Step 23 — Lock down file permissions
 
 ```bash
 chmod 700 ~/.openclaw
@@ -2259,7 +2346,7 @@ ls -la ~/.openclaw/openclaw.json
 
 Expected: `-rw-------` at the start of the line.
 
-### Step 23 — Restart the gateway to apply all changes
+### Step 24 — Restart the gateway to apply all changes
 
 ```bash
 systemctl --user restart openclaw-gateway
@@ -2269,7 +2356,7 @@ systemctl --user restart openclaw-gateway
 
 ## Part F — Verify the Hardened Setup
 
-### Step 24 — Run the security audit
+### Step 25 — Run the security audit
 
 ```bash
 openclaw security audit --deep
@@ -2290,7 +2377,7 @@ The remaining items should be:
   - `hooks: disabled`
   - `browser control: disabled`
 
-### Step 25 — Run the doctor
+### Step 26 — Run the doctor
 
 ```bash
 openclaw doctor
@@ -2298,7 +2385,7 @@ openclaw doctor
 
 Expected: clean output with no critical or sandbox warnings.
 
-### Step 26 — Check gateway status
+### Step 27 — Check gateway status
 
 ```bash
 openclaw status
@@ -2327,7 +2414,7 @@ Before moving to Phase 5, confirm every item:
 - [ ] Gateway bound to **loopback** (127.0.0.1)
 - [ ] Gateway auth token set (auto-generated)
 - [ ] Tailscale exposure is **off**
-- [ ] Sandbox mode is `"all"` — every tool runs in Docker
+- [ ] Sandbox mode is `"non-main"` — sub-agent tools run in Docker; main session runs on host for browser access
 - [ ] Tools restricted to an explicit allowlist
 - [ ] Browser control **disabled**
 - [ ] Elevated mode **disabled**
@@ -2443,7 +2530,7 @@ Before starting this phase, confirm the following are complete:
 
 - **Phase 1–2**: Raspberry Pi 5 running Raspberry Pi OS Lite (64-bit) on NVMe, hardened (UFW, fail2ban, SSH key-only, unattended-upgrades), on an isolated network segment.
 - **Phase 3**: Ollama installed and running as a system service with models pulled (`ollama list` shows your models).
-- **Phase 4**: OpenClaw installed under a dedicated `openclaw` user (no sudo privileges), Docker working, onboarding wizard completed, gateway bound to loopback, sandbox mode `"all"`, tool allowlist configured, security audit clean.
+- **Phase 4**: OpenClaw installed under a dedicated `openclaw` user (no sudo privileges), Docker working, onboarding wizard completed, gateway bound to loopback, sandbox mode `"non-main"`, tool allowlist configured, Chromium installed, security audit clean.
 - **Systemd service**: The OpenClaw gateway is running as a **user-level** systemd service named `openclaw-gateway` under the `openclaw` user.
 
 ### Key service commands used throughout this guide
@@ -2568,7 +2655,8 @@ Add a `channels` section at the top level of the JSON (e.g., after the `gateway`
         "botToken": "<YOUR_BOT_TOKEN>",
         "dmPolicy": "allowlist",
         "allowFrom": [],
-        "groupPolicy": "disabled"
+        "groupPolicy": "disabled",
+        "streaming": "partial"
     }
 }
 ```
@@ -2584,6 +2672,7 @@ Configuration explained:
 | `dmPolicy` | `"allowlist"` | **Only** user IDs listed in `allowFrom` can message the bot. Everyone else is silently ignored. This is stricter than the default `"pairing"` mode. |
 | `allowFrom` | `[]` | Empty for now — we add your user ID in Step 13. |
 | `groupPolicy` | `"disabled"` | Completely disables group chat. Defense-in-depth alongside the BotFather group-join disable. |
+| `streaming` | `"partial"` | Enables partial message streaming — OpenClaw sends incremental updates as it generates a response, so you see progress in real time instead of waiting for the full reply. |
 
 #### 9b: Enable the Telegram plugin
 
@@ -2783,11 +2872,11 @@ Replace it with:
 ```json
 "model": {
     "primary": "anthropic/claude-opus-4-6",
-    "fallbacks": ["ollama/qwen3:8b"]
+    "fallbacks": []
 }
 ```
 
-This keeps Claude as the primary model for all real work. The local model is only used if the Claude API is unavailable (downtime, rate limiting). This is important because smaller local models are much more vulnerable to prompt injection and produce lower-quality code.
+This keeps Claude as the primary model for all real work. The `fallbacks` array is empty — you can optionally add local models later (e.g., `"ollama/qwen3:8b"`) if you want automatic fallback when the Claude API is unavailable. Note that smaller local models are much more vulnerable to prompt injection and produce lower-quality code, so use fallbacks with caution.
 
 **Change 2: Add a top-level `models` section.** Add this at the top level of the JSON (with correct comma separation):
 
@@ -2796,19 +2885,10 @@ This keeps Claude as the primary model for all real work. The local model is onl
     "mode": "merge",
     "providers": {
         "ollama": {
-            "baseUrl": "http://127.0.0.1:11434/v1",
+            "baseUrl": "http://<DOCKER_BRIDGE_IP>:11434/v1",
             "apiKey": "ollama-local",
             "api": "openai-completions",
             "models": [
-                {
-                    "id": "qwen3:1.7b",
-                    "name": "Qwen3 1.7B",
-                    "reasoning": false,
-                    "input": ["text"],
-                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-                    "contextWindow": 32768,
-                    "maxTokens": 8192
-                },
                 {
                     "id": "qwen3:8b",
                     "name": "Qwen3 8B",
@@ -2865,7 +2945,7 @@ Configuration explained:
 | Key | Purpose |
 |-----|---------|
 | `"mode": "merge"` | Keeps all built-in providers (Anthropic) and adds Ollama alongside them. Without this, Ollama would replace everything. |
-| `"baseUrl"` | Points to Ollama's OpenAI-compatible API endpoint on localhost. The `/v1` suffix is required. |
+| `"baseUrl"` | Points to Ollama's OpenAI-compatible API endpoint. Uses the Docker bridge gateway IP (`<DOCKER_BRIDGE_IP>`) instead of `127.0.0.1` so that sandboxed containers can also reach Ollama on the host. Find your Docker bridge IP with: `ip addr show docker0 \| grep inet`. The `/v1` suffix is required. |
 | `"apiKey": "ollama-local"` | Ollama doesn't require a real key, but OpenClaw needs a non-empty value for its availability check. |
 | `"api": "openai-completions"` | Tells OpenClaw to use the OpenAI-compatible completions protocol. |
 | `"cost": all zeros` | These models run locally — no per-token charges. |
@@ -2909,10 +2989,9 @@ Expected output:
 ```
 Model                                      Input      Ctx      Local Auth  Tags
 anthropic/claude-opus-4-6                  text+image 195k     no    yes   default,configured,alias:opus
-ollama/qwen3:8b                            text       32k      yes   yes   fallback#1
 ```
 
-Only `qwen3:8b` appears because it's the only model configured as a fallback. The other four models (qwen3:1.7b, gemma3:4b, gemma3:1b, qwen3-vl:2b) are registered and available — you can switch to them manually in Telegram using the `/model` command, but they won't be used automatically unless added to the fallback chain.
+Only Claude appears as the active model. The Ollama models (qwen3:8b, gemma3:4b, gemma3:1b, qwen3-vl:2b) are registered and available — you can switch to them manually in Telegram using the `/model` command, or add them to the `fallbacks` array if you want automatic failover.
 
 ---
 
@@ -3149,12 +3228,20 @@ chmod 600 ~/.git-credentials
 
 ---
 
-## Part 2 — Set Up Web Search for Research
+## Part 2 — (Optional) Web Search via Brave API
 
-OpenClaw uses the Brave Search API for web research via the `web_search`
-tool. For JavaScript-heavy websites that `web_fetch` can't handle, the
-browser tool (enabled in Phase 4, Step 21) provides full Chromium control.
-The Brave Search API key below powers `web_search` specifically.
+> **This section is optional.** OpenClaw already has full web access via the `browser` tool (Chromium) and `web_fetch` (lightweight HTTP). These two tools cover all web access use cases without any API keys or costs.
+>
+> Brave Search adds **structured search-engine-style results** (like an API version of Google) — useful for quickly finding URLs, but not essential. Consider the tradeoffs before adding it:
+>
+> | Factor | Without Brave | With Brave |
+> |---|---|---|
+> | Web access | ✅ `browser` + `web_fetch` | ✅ All three tools |
+> | API key needed | No | Yes (additional secret to manage) |
+> | Cost | Free | Free tier: 2,000 queries/month; paid beyond |
+> | Attack surface | Smaller | Slightly larger (one more API key to protect and rotate) |
+
+If you want Brave Search, follow the steps below. Otherwise, skip to Part 3.
 
 ### Step 1: Obtain a Brave Search API key
 
@@ -3176,6 +3263,20 @@ BRAVE_API_KEY=<YOUR_BRAVE_SEARCH_API_KEY>
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`). OpenClaw's `web_search` tool will automatically use Brave Search when this key is present — no config change needed.
 
+### Step 3: Enable the web_search tool
+
+If you set up Brave Search, you need to move `web_search` from the deny list to the allow list in `openclaw.json`:
+
+```bash
+nano ~/.openclaw/openclaw.json
+```
+
+In `tools.allow`, add `"web_search"`. In `tools.deny`, remove `"web_search"`. Then restart:
+
+```bash
+systemctl --user restart openclaw-gateway
+```
+
 Verify permissions are still restrictive after editing:
 
 ```bash
@@ -3194,6 +3295,7 @@ chmod 600 ~/.openclaw/.env
 
 - [ ] Brave Search API key obtained
 - [ ] Key added to `~/.openclaw/.env`
+- [ ] `web_search` moved from `tools.deny` to `tools.allow` in `openclaw.json`
 
 ---
 
@@ -3247,6 +3349,7 @@ Locate the `agents.defaults.sandbox.docker` section. Update `network` from `"non
         "docker": {
           "network": "bridge",
           "user": "<OPENCLAW_UID>:<OPENCLAW_UID>",
+          "setupCommand": "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
           "env": {
             "GIT_AUTHOR_NAME": "<YOUR_OPENCLAW_GITHUB_USERNAME>",
             "GIT_AUTHOR_EMAIL": "<YOUR_OPENCLAW_EMAIL>",
@@ -3262,6 +3365,8 @@ Locate the `agents.defaults.sandbox.docker` section. Update `network` from `"non
 ```
 
 > **Note:** Only the fields being added or changed are shown. Keep all your existing settings (`mode`, `scope`, `workspaceAccess`, `image`, `readOnlyRoot`) intact.
+
+> **Note:** The `setupCommand` configures a dynamic Git credential helper inside each sandbox container. When Git needs to authenticate (e.g., during `git push`), it calls this helper function, which returns the `GITHUB_TOKEN` from the environment. This is more robust than storing plaintext credentials in `.git-credentials` — the token is only exposed when Git actively needs it.
 
 > **Note:** The sandbox does **not** inherit the host's `process.env`. Environment variables must be set explicitly in `agents.defaults.sandbox.docker.env`. The OpenClaw docs confirm this: sandbox containers are isolated from the host environment. This means the token must be placed directly in this config block. The file is already permission-locked to `600` (only the `openclaw` user can read it), limiting exposure.
 
@@ -3371,8 +3476,8 @@ Or send `/stop` in the chat to immediately halt whatever OpenClaw is doing.
 
 - [ ] Dedicated GitHub account created (separate from your personal account)
 - [ ] Workspace backed up to a private GitHub repository
-- [ ] Brave Search API key configured
-- [ ] Sandbox configured with network access and GitHub credentials
+- [ ] (Optional) Brave Search API key configured
+- [ ] Sandbox configured with network access, Git credential helper, and GitHub credentials
 - [ ] Full coding workflow tested: describe → OpenClaw builds → code pushed to GitHub
 - [ ] (Optional) GitHub Pages enabled for viewing prototypes
 - [ ] Review habits understood: `/new`, `/compact`, `/status`, `/stop`
@@ -3695,7 +3800,7 @@ Find the `agents.defaults.sandbox.docker` section and make two changes:
     "readOnlyRoot": false,
     "user": "<OPENCLAW_UID>:<OPENCLAW_UID>",
     "binds": [
-        "/home/openclaw/.config/rclone:/home/claw/.config/rclone:ro"
+        "/home/openclaw/.openclaw/workspace/.shared-config/rclone:/home/claw/.config/rclone:ro"
     ],
     "env": {
         ...existing env entries (GIT_AUTHOR_NAME, etc.)...
@@ -3901,11 +4006,11 @@ chmod 600 ~/.config/rclone/rclone.conf
 
 **`rclone: command not found` inside sandbox:** The sandbox is still using the old image. Run `openclaw sandbox recreate --all` (select Yes) and retry.
 
-**`rclone copy` fails with "permission denied" inside sandbox:** The bind mount may not be working. Verify the `binds` path matches exactly: `/home/openclaw/.config/rclone:/home/claw/.config/rclone:ro`. The left side is the host path; the right side is the container path.
+**`rclone copy` fails with "permission denied" inside sandbox:** The bind mount may not be working. Verify the `binds` path matches exactly: `/home/openclaw/.openclaw/workspace/.shared-config/rclone:/home/claw/.config/rclone:ro`. The left side is the host path; the right side is the container path.
 
 **OpenClaw says "rclone config exists but can't read it" or reports a UID/permission mismatch:** The container user's UID does not match the host `openclaw` user's UID. If you followed Phase 4's dynamic UID strategy, rebuild the sandbox image with the correct UID (see Step 11). As a quick workaround, run `chmod 644 ~/.config/rclone/rclone.conf` on the Pi — but rebuilding the image is the cleaner fix. Do **not** run `chown 1000:1000` as OpenClaw may suggest — that would change ownership away from the `openclaw` user on the host, which could cause different problems.
 
-**`Failed to create file system for "openclaw-gdrive"` inside sandbox:** The rclone config isn't accessible. Check that the host path exists (`ls ~/.config/rclone/rclone.conf`) and that the bind mount uses `:ro`.
+**`Failed to create file system for "openclaw-gdrive"` inside sandbox:** The rclone config isn't accessible. Check that the host path exists (`ls ~/.openclaw/workspace/.shared-config/rclone/rclone.conf`) and that the bind mount uses `:ro`.
 
 **Token paste step — browser shows "This app isn't verified":** This is normal for rclone. Click **Advanced** → **Go to rclone (unsafe)** → **Allow**.
 
@@ -4194,6 +4299,8 @@ ssh <ADMIN_USER>@openclaw-pi
 ```
 
 > ⚠️ **Deviation from official docs:** The OpenClaw documentation recommends setting `gateway.tailscale.mode: "serve"` in `openclaw.json` for automatic Tailscale Serve management. On this setup, the automatic method does not work because the `openclaw` user (which runs the gateway as a systemd user service) lacks the elevated permissions required to run `tailscale serve`. The manual approach below is used instead. This is functionally equivalent and avoids granting additional privileges to the restricted user.
+>
+> **Note on config state:** The Phase 4 hardened config sets `gateway.tailscale.mode: "off"`. After completing this phase, you do **not** need to change it — the manual `tailscale serve --bg` command handles everything independently. The config value remains `"off"` because the gateway is not managing Tailscale Serve itself.
 
 First, confirm the gateway is running and responding locally:
 
