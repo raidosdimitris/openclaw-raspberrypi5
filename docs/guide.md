@@ -14,6 +14,7 @@
 - [Phase 6.5 — Google Drive Access for Document Sharing](#phase-65-google-drive-access-for-document-sharing): Installing rclone, authenticating with a dummy Google account, custom sandbox image with rclone, bind-mounting credentials, testing uploads.
 - [Phase 7 — Ongoing Maintenance & Monitoring](#phase-7--ongoing-maintenance--monitoring): Maintenance checklist (rotation schedules, updates, backups) and incident response protocol. *(Detailed walkthroughs planned for a future update.)*
 - [Phase 8 — Tailscale Remote Access & Control UI Setup](#phase-8-tailscale-remote-access--control-ui-setup): Installing Tailscale, Tailscale Serve for the Control UI, firewall rules for Tailscale SSH, device pairing, convenience aliases.
+- [Phase 9 — Cost Management & Usage Monitoring](#phase-9--cost-management--usage-monitoring): Understanding API token pricing, how input costs accumulate, prompt caching, OpenClaw cost-control configuration, silent cost killers, practical monthly estimates, and monitoring spending via the Anthropic Console.
 
 ---
 
@@ -4626,4 +4627,320 @@ sudo grep '"token"' /home/openclaw/.openclaw/openclaw.json
 ```bash
 sudo reboot
 ```
+
+# Phase 9 — Cost Management & Usage Monitoring
+
+**What this phase covers:** Understanding how API costs work, why an always-on AI agent is fundamentally different from ChatGPT-style usage, and how to configure OpenClaw to keep your spending predictable.
+
+**Prerequisites:** A fully working OpenClaw setup (Phases 0–8 complete). No additional hardware or software needed.
+
+> **Why this matters:** The guide so far covers security, networking, and configuration — but says nothing about cost. For beginners running an always-on AI agent on Claude Opus, this is a critical blind spot. A $5 experiment can quietly become a $200 month if you don't understand the mechanics.
+
+---
+
+## 1. Understanding the Cost Model
+
+Every time you send a message to Claude through OpenClaw, two things are billed:
+
+- **Input tokens** — everything *sent to* the model (your message, the conversation history, system prompt, workspace files)
+- **Output tokens** — everything the model *generates back* (its reply, tool calls, reasoning)
+
+One "token" is roughly ¾ of a word. The sentence "Hello, how are you today?" is about 7 tokens.
+
+### Current pricing (March 2026)
+
+| Model | Input | Output | Best for |
+|-------|-------|--------|----------|
+| **Claude Opus 4.6** | $5 / MTok | $25 / MTok | Complex reasoning, coding, main sessions |
+| **Claude Sonnet 4.6** | $3 / MTok | $15 / MTok | Balanced speed and intelligence |
+| **Claude Haiku 4.5** | $1 / MTok | $5 / MTok | Fast, simple tasks, sub-agents |
+
+*MTok = 1 million tokens. Prices are per million.*
+
+> ⚠️ **API pricing changes over time.** Always check [Anthropic's pricing page](https://docs.anthropic.com/en/docs/about-claude/pricing) for current rates.
+
+### Why this is different from ChatGPT
+
+With ChatGPT, you pay a flat monthly subscription ($20/month) regardless of how much you use it. With the Anthropic API (which OpenClaw uses), you pay **per token** — the more you use, the more you pay. This gives you access to the full power of the model with no rate limits, but it means costs scale with usage.
+
+---
+
+## 2. How Input Tokens Accumulate
+
+This is the single most important thing to understand about API costs: **every message you send includes the entire conversation history.**
+
+Claude doesn't "remember" your previous messages. Each time you send a new message, OpenClaw packages up the *entire conversation so far* — every message you've sent, every response Claude gave, plus the system prompt and workspace files — and sends it all as input tokens.
+
+This means input costs grow **quadratically**, not linearly:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  HOW INPUT TOKENS GROW PER MESSAGE                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Message 1:  [system prompt + workspace files + user message]       │
+│              ├──────────────── 8,000 tokens ──────────────────┤      │
+│              Input cost: 8K tokens                                  │
+│                                                                     │
+│  Message 2:  [system + workspace + msg 1 + response 1 + msg 2]     │
+│              ├────────────────── 12,000 tokens ────────────────┤     │
+│              Input cost: 12K tokens (not 4K!)                       │
+│                                                                     │
+│  Message 3:  [system + workspace + msg 1-2 + responses 1-2 + msg 3]│
+│              ├──────────────────── 18,000 tokens ──────────────┤     │
+│              Input cost: 18K tokens                                 │
+│                                                                     │
+│  Message 10: [entire conversation history]                          │
+│              ├────────────────────── 80,000+ tokens ──────────┤     │
+│              Input cost: 80K+ tokens                                │
+│                                                                     │
+│  ⚠️  You pay for the FULL context every single message.             │
+│     A 20-message session doesn't cost 20× one message —            │
+│     it costs roughly 20 + 19 + 18 + ... + 1 = 210× one message.   │
+│     (Triangular growth, not linear!)                                │
+│                                                                     │
+│  📐 Rough formula:  total_input ≈ n(n+1)/2 × avg_message_size      │
+│     + n × base_context (system prompt + workspace files)            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**The takeaway:** Long conversations are disproportionately expensive. A 30-message coding session costs far more than three 10-message sessions covering the same work. Use `/new` or `/reset` to start fresh sessions when the topic changes.
+
+---
+
+## 3. Where Your Tokens Go
+
+Every single message — even just "hello" — carries a base context that OpenClaw sends alongside it. Here's what that looks like:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│               BASE CONTEXT BREAKDOWN (per message)                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  System prompt (OpenClaw internals)     ~2,000 tokens   ██          │
+│  AGENTS.md                             ~1,500 tokens   █▌          │
+│  SOUL.md                                 ~300 tokens   ▎           │
+│  USER.md                                 ~250 tokens   ▎           │
+│  TOOLS.md                              ~1,000 tokens   █           │
+│  MEMORY.md                             ~1,200 tokens   █           │
+│  HEARTBEAT.md                            ~100 tokens   ▏           │
+│  Skills metadata                         ~500 tokens   ▌           │
+│  ─────────────────────────────────────────────────                  │
+│  Base total:                           ~6,850 tokens               │
+│                                                                     │
+│  ⚠️  This is sent with EVERY message, even "hello".                │
+│     Larger workspace files = higher base cost.                      │
+│     Keep MEMORY.md and TOOLS.md lean.                               │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Practical implication:** If your `MEMORY.md` grows to 5,000 tokens because you never prune it, that's an extra 5,000 input tokens on *every single message*. Over 100 messages in a day, that's 500K extra tokens — $2.50 on Opus just from one bloated file.
+
+---
+
+## 4. What Prompt Caching Does (and Why You Want It)
+
+Anthropic offers **prompt caching** — a feature that dramatically reduces the cost of the repeated prefix (system prompt, workspace files, conversation history) that gets re-sent with every message.
+
+Here's the mechanism: the first time a block of tokens is sent, it's written to a cache. On subsequent messages, the cached portion is read back at a fraction of the cost instead of being re-processed at full price.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              WITHOUT CACHING vs WITH CACHING                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  WITHOUT CACHING (every message pays full price):                   │
+│                                                                     │
+│  Msg 1:  [████████░░░░░░░░░░░░]  8K tokens  → $0.04                │
+│  Msg 2:  [████████████░░░░░░░░] 12K tokens  → $0.06                │
+│  Msg 3:  [████████████████░░░░] 18K tokens  → $0.09                │
+│  Msg 4:  [████████████████████] 24K tokens  → $0.12                │
+│                                              ──────                 │
+│                                    Total:    $0.31                  │
+│                                                                     │
+│  WITH CACHING (repeated prefix served from cache):                  │
+│                                                                     │
+│  Msg 1:  [████████░░░░░░░░░░░░]  8K tokens  → $0.05  (cache write) │
+│  Msg 2:  [▒▒▒▒▒▒▒▒████░░░░░░░░] 12K tokens → $0.02  (8K cached)  │
+│  Msg 3:  [▒▒▒▒▒▒▒▒▒▒▒▒████░░░░] 18K tokens → $0.02  (12K cached) │
+│  Msg 4:  [▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒████] 24K tokens → $0.02  (18K cached) │
+│                                              ──────                 │
+│                                    Total:    $0.11  (65% savings!)  │
+│                                                                     │
+│  Legend: ████ = full-price tokens   ▒▒▒▒ = cache-hit tokens         │
+│          ░░░░ = unused context window                               │
+│                                                                     │
+│  Cache hits:  $0.50 / MTok  (90% cheaper than $5 / MTok base)      │
+│  Cache writes (1h): $10 / MTok on first use, then saves on re-read │
+│  Cache writes (5m): $6.25 / MTok (shorter TTL, lower write cost)   │
+│  Net effect: massive savings on long conversations.                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Enabling prompt caching in OpenClaw
+
+SSH into your Pi and edit the OpenClaw configuration:
+
+```bash
+sudo -u openclaw nano /home/openclaw/.openclaw/openclaw.json
+```
+
+Add `cacheRetention` inside the `agents.defaults` block:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "cacheRetention": "long"
+    }
+  }
+}
+```
+
+The `"long"` setting uses Anthropic's 1-hour cache TTL. This means cached tokens persist for 1 hour between messages — ideal for conversations where you're actively going back and forth. The write cost is higher ($10/MTok vs $6.25/MTok for the 5-minute TTL), but the cache stays warm much longer, so you get more cache hits overall.
+
+Restart the gateway for the change to take effect:
+
+```bash
+systemctl --user restart openclaw-gateway
+```
+
+---
+
+## 5. OpenClaw Configuration for Cost Control
+
+Beyond prompt caching, OpenClaw provides several configuration options to manage costs. All of these go in `/home/openclaw/.openclaw/openclaw.json`.
+
+### Model tiering
+
+Use a powerful model for your main session and cheaper models for sub-agents (automated tasks the agent spawns):
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-6",
+      "subagentModel": "anthropic/claude-sonnet-4-6"
+    }
+  }
+}
+```
+
+This means your conversations use Opus (the best model), but when the agent spawns background tasks — file analysis, code generation, research — those use Sonnet at 40% lower cost.
+
+### Context pruning
+
+Long conversations accumulate tokens. Context pruning automatically trims older messages from the conversation when they fall outside a time window:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
+      }
+    }
+  }
+}
+```
+
+This keeps the conversation focused and prevents runaway input costs on long sessions.
+
+### Heartbeat frequency
+
+Heartbeats are periodic check-ins where OpenClaw's agent wakes up to see if anything needs attention. Each heartbeat is a full API call with the complete base context.
+
+The default interval is roughly 30 minutes, which means ~48 API calls per day just for heartbeats. If cost is a concern, consider increasing the interval or disabling heartbeats when you don't need proactive monitoring.
+
+### Local model offloading
+
+If you installed Ollama in Phase 3, you can route low-stakes tasks to local models at **zero API cost**:
+
+- Heartbeat checks (simple "anything new?" polls)
+- Basic lookups and formatting
+- Draft generation before sending to a cloud model for refinement
+
+This is configured per-task through OpenClaw's model routing, not as a global default. Consult the [OpenClaw docs](https://docs.openclaw.ai) for the latest routing configuration options.
+
+---
+
+## 6. The Silent Cost Killers
+
+These are the things that burn tokens without you noticing:
+
+| Cost killer | Why it's expensive | What to do |
+|---|---|---|
+| **Bloated workspace files** | A 5,000-token MEMORY.md is sent with every single message | Prune regularly. Keep workspace files lean and relevant. |
+| **Frequent heartbeats** | ~48 API calls/day at default 30-min interval, each carrying the full base context | Increase interval, use local models for heartbeats, or disable when not needed. |
+| **Sub-agents spawning sub-agents** | Each gets its own full context and session | Use model tiering (Sonnet/Haiku for sub-agents). Monitor with `openclaw status`. |
+| **Long coding sessions** | 30+ messages deep with tool outputs can hit 100K+ input tokens per message | Use `/new` to reset between distinct tasks. Break work into focused sessions. |
+| **Group chat history** | Every message in a group chat adds to the context window | Keep group chats focused. Use DMs for extended conversations. |
+| **Tool outputs** | File contents, command outputs, and search results all count as tokens | Be specific about what you ask for. "Show lines 1-50" beats "show me the whole file". |
+
+---
+
+## 7. Practical Cost Estimates
+
+Here are rough monthly estimates for Claude Opus 4.6 usage through OpenClaw, **with prompt caching enabled**. These assume a base context of ~7K tokens per message.
+
+| Usage pattern | Messages/day | Estimated monthly cost |
+|---|---|---|
+| **Light** — a few questions per day, short conversations | 5–10 | $5–15 |
+| **Moderate** — daily conversations, occasional coding, heartbeats enabled | 20–40 | $20–60 |
+| **Heavy** — extended coding sessions, sub-agents, research tasks, frequent heartbeats | 60–100+ | $60–200+ |
+
+**Without caching**, multiply these estimates by roughly 2–3×.
+
+**With model tiering** (Sonnet for sub-agents, Haiku for heartbeats), heavy usage can drop significantly — potentially 30–50% savings depending on how much work is offloaded.
+
+> 💡 **Tip:** Your actual costs depend heavily on conversation length, tool usage, and how often you reset sessions. The single biggest cost saver is keeping conversations short and using `/new` between topics.
+
+---
+
+## 8. Monitoring Your Spending
+
+### Anthropic Console
+
+Your primary cost-monitoring tool is the [Anthropic Console](https://console.anthropic.com):
+
+1. Log in at [console.anthropic.com](https://console.anthropic.com)
+2. Navigate to **Settings → Plans & Billing** to see your current spend
+3. Check the **Usage** tab for a breakdown by model, showing input vs output vs cache token usage
+
+### Setting a monthly spend limit
+
+This is **strongly recommended** for beginners:
+
+1. In the Anthropic Console, go to **Settings → Plans & Billing → Spend Limits**
+2. Set a monthly limit you're comfortable with (e.g., $50 for moderate usage)
+3. When you hit the limit, API calls will start returning errors — OpenClaw will stop working until the next billing cycle or until you raise the limit
+
+This is your safety net. Set it before you start using OpenClaw daily.
+
+### OpenClaw's built-in status
+
+You can check your current session's token usage directly through OpenClaw:
+
+```
+/status
+```
+
+This shows the current session's token consumption, model in use, and cost estimate. Use it periodically to calibrate your sense of how much different activities cost.
+
+---
+
+## Phase 9 Checklist
+
+Before moving on, confirm:
+
+- [ ] You understand the difference between input and output tokens
+- [ ] You understand why long conversations cost more than short ones (quadratic growth)
+- [ ] Prompt caching is enabled (`cacheRetention: "long"` in `openclaw.json`)
+- [ ] You've set a monthly spend limit in the Anthropic Console
+- [ ] You've considered model tiering for sub-agents (optional but recommended)
+- [ ] You know how to check usage via the Anthropic Console and `/status`
 
