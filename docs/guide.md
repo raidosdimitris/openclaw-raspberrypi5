@@ -2093,7 +2093,11 @@ Delete all existing content and replace with the following. **You must replace `
           "network": "bridge",
           "readOnlyRoot": false,
           "user": "<OPENCLAW_UID>:<OPENCLAW_UID>",
-          "setupCommand": "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'"
+          "setupCommand": "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
+          "env": {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/tmp/.gitconfig"
+          }
         },
         "browser": {
           "enabled": true,
@@ -2213,6 +2217,8 @@ Save and exit nano: `Ctrl+O`, `Enter`, `Ctrl+X`.
 | `agents.defaults.sandbox.docker.network` | `"bridge"` | Allows internet access inside the sandbox (needed for `npm install`, `pip install`, etc.). Uses Docker's default isolated network. |
 | `agents.defaults.sandbox.docker.image` | `"openclaw-sandbox:bookworm-slim"` | Uses the custom sandbox image built in Step 15, which includes Node.js 22 and runs as a non-root user matching the host `openclaw` UID. |
 | `agents.defaults.sandbox.docker.setupCommand` | (git credential helper) | Configures a dynamic Git credential helper inside sandbox containers so they can push to GitHub using `$GITHUB_TOKEN` without storing plaintext credentials in `.git-credentials`. More robust than the raw token approach. |
+| `agents.defaults.sandbox.docker.env.GIT_CONFIG_NOSYSTEM` | `"1"` | Tells Git to skip reading the system-wide `/etc/gitconfig`. Avoids errors when the system config doesn't exist or isn't readable in the sandbox. |
+| `agents.defaults.sandbox.docker.env.GIT_CONFIG_GLOBAL` | `"/tmp/.gitconfig"` | Redirects Git's global config file to a writable path. In sandbox containers, `$HOME` resolves to `/` (the filesystem root), which isn't writable — so `git config --global` (used by the `setupCommand`) fails with "Permission denied." This redirects it to `/tmp/.gitconfig`, which is always writable. |
 | `agents.defaults.sandbox.browser.enabled` | `true` | Enables the sandbox browser for sub-agent sessions. Uses a dedicated browser image (`openclaw-sandbox-browser:bookworm-slim`) that runs Chromium inside the container. |
 | `agents.defaults.sandbox.browser.allowHostControl` | `true` | Allows sandbox sessions to request browser actions on the host when the sandbox browser is unavailable. |
 | `tools.allow` | (explicit list) | Allowlist of permitted tools: shell commands, file I/O, sessions, memory, web fetch, and browser. Only these tools are available — everything else is blocked. Note: `web_search` is not included (requires Brave API key — see optional section in Phase 6). |
@@ -3352,6 +3358,8 @@ Locate the `agents.defaults.sandbox.docker` section. Update `network` from `"non
           "user": "<OPENCLAW_UID>:<OPENCLAW_UID>",
           "setupCommand": "git config --global credential.helper '!f() { echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f'",
           "env": {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/tmp/.gitconfig",
             "GIT_AUTHOR_NAME": "<YOUR_OPENCLAW_GITHUB_USERNAME>",
             "GIT_AUTHOR_EMAIL": "<YOUR_OPENCLAW_EMAIL>",
             "GIT_COMMITTER_NAME": "<YOUR_OPENCLAW_GITHUB_USERNAME>",
@@ -3370,6 +3378,8 @@ Locate the `agents.defaults.sandbox.docker` section. Update `network` from `"non
 > **Note:** The `setupCommand` configures a dynamic Git credential helper inside each sandbox container. When Git needs to authenticate (e.g., during `git push`), it calls this helper function, which returns the `GITHUB_TOKEN` from the environment. This is more robust than storing plaintext credentials in `.git-credentials` — the token is only exposed when Git actively needs it.
 
 > **Note:** The sandbox does **not** inherit the host's `process.env`. Environment variables must be set explicitly in `agents.defaults.sandbox.docker.env`. The OpenClaw docs confirm this: sandbox containers are isolated from the host environment. This means the token must be placed directly in this config block. The file is already permission-locked to `600` (only the `openclaw` user can read it), limiting exposure.
+
+> **Note:** `GIT_CONFIG_NOSYSTEM` and `GIT_CONFIG_GLOBAL` fix a sandbox-specific issue: the container's `$HOME` resolves to `/` (the filesystem root), which isn't writable. Without these variables, the `setupCommand` fails immediately with `error: could not lock config file //.gitconfig: Permission denied`, killing every sub-agent before it starts — even if the task doesn't involve Git at all. `GIT_CONFIG_GLOBAL=/tmp/.gitconfig` redirects Git's global config to a writable path so the credential helper setup succeeds. These must be present in the `env` block from the start, not just when you add Git credentials in Phase 6.
 
 Save and exit.
 
@@ -3498,6 +3508,30 @@ The systemd service is named `openclaw-gateway`, not `openclaw`. Find the exact 
 ```bash
 systemctl --user list-units --type=service | grep -i openclaw
 ```
+
+### Sub-agents crash with `could not lock config file //.gitconfig: Permission denied`
+
+Every sub-agent dies immediately with zero tokens processed. The full error is:
+
+```
+error: could not lock config file //.gitconfig: Permission denied
+```
+
+**Cause:** The sandbox container's `$HOME` is `/` (the filesystem root), which isn't writable. The `setupCommand` runs `git config --global ...` during bootstrap, which tries to write to `$HOME/.gitconfig` — i.e., `/.gitconfig`. The write fails, and the entire agent startup crashes before it can process any task.
+
+**Fix:** Add two environment variables to `agents.defaults.sandbox.docker.env` in `openclaw.json`:
+
+```json
+"env": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/tmp/.gitconfig",
+    ...other env entries...
+}
+```
+
+`GIT_CONFIG_NOSYSTEM=1` skips the system-wide Git config. `GIT_CONFIG_GLOBAL=/tmp/.gitconfig` redirects the global config to a writable path. The `setupCommand` credential helper still works — it just writes to `/tmp/.gitconfig` instead. Restart the gateway after applying.
+
+> **Why not `/dev/null`?** Using `/dev/null` would silently discard the credential helper written by `setupCommand`, breaking Git authentication for any sub-agent that needs to push code.
 
 ### OpenClaw cannot push to GitHub from the sandbox
 
